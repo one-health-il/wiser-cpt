@@ -26,7 +26,7 @@ SECRETS = ROOT / ".streamlit" / "secrets.toml"
 CRITERIA_COLUMNS = [
     "id", "section", "item", "source", "quote_from_source",
     "changed_criteria", "changed_source", "reviewed", "changed",
-    "medically_necessary",
+    "medically_necessary", "subjective_objective",
 ]
 
 
@@ -110,6 +110,7 @@ def _master_rows(username: str) -> list[dict]:
             "reviewed": "",
             "changed": "no",
             "medically_necessary": "",
+            "subjective_objective": "",
         })
     return rows
 
@@ -130,7 +131,10 @@ def load_user(username: str) -> pd.DataFrame:
             .select("*").eq("username", username).execute().data)
     df = pd.DataFrame(rows).rename(columns={"criterion_id": "id"})
     if df.empty:
-        return pd.DataFrame(columns=CRITERIA_COLUMNS)
+        return pd.DataFrame(columns=["row_id"] + CRITERIA_COLUMNS)
+    for c in CRITERIA_COLUMNS:           # tolerate a column not yet added
+        if c not in df.columns:
+            df[c] = ""
     df = df.sort_values("row_id").reset_index(drop=True)
     return df[["row_id"] + CRITERIA_COLUMNS].fillna("")
 
@@ -150,3 +154,18 @@ def reset_user(username: str) -> None:
     """Delete all of the user's rows and reseed from master."""
     get_client().table("criteria").delete().eq("username", username).execute()
     get_client().table("criteria").insert(_master_rows(username)).execute()
+
+
+def reset_criterion(username: str, criterion_id: str) -> None:
+    """Restore a single criterion to its master state (clearing the user's
+    edits/answers). For user-added criteria (not in master), just clear edits."""
+    cleared = {"changed_criteria": "", "changed_source": "", "reviewed": "",
+               "changed": "no", "medically_necessary": "",
+               "subjective_objective": ""}
+    master = pd.read_csv(MASTER, dtype=str).fillna("")
+    m = master[master["id"] == criterion_id]
+    if len(m):
+        r = m.iloc[0]
+        cleared.update({"item": r["item"], "source": r["source"],
+                        "quote_from_source": r["verbatim_anchor"]})
+    update_criterion(username, criterion_id, cleared)

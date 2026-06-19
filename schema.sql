@@ -27,6 +27,7 @@ create table if not exists public.criteria (
     reviewed            text not null default '',    -- 'yes' / ''
     changed             text not null default 'no',  -- 'yes' / 'no'  (derived)
     medically_necessary text not null default '',    -- 'Yes' / 'No' / ''
+    subjective_objective text not null default '',    -- 'Subjective' / 'Objective' / ''
     updated_at          timestamptz not null default now(),
     unique (username, criterion_id)
 );

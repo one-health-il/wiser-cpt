@@ -187,7 +187,7 @@ def render_source_viewer(row):
 # Editor (left pane)
 # --------------------------------------------------------------------------- #
 def render_add_form(username, df):
-    with st.expander("➕ Add Criterion"):
+    with st.expander("Add Criterion"):
         with st.form("add_form", clear_on_submit=True):
             sections = sorted(df["section"].dropna().unique())
             section = st.selectbox("Section", [""] + list(sections))
@@ -223,10 +223,11 @@ def save_current_edits(username, df, sid):
     custom = st.session_state.get(f"ed_custom_{sid}", "")
     reviewed = st.session_state.get(f"ed_rev_{sid}", False)
 
-    codes = list(chosen) + [c.strip() for c in re.split(r"[+,]", custom) if c.strip()]
+    custom_codes = [c.strip() for c in re.split(r"[+,]", custom) if c.strip()]
+    orig_codes = src.extract_codes(row["source"])  # locked-in
+    added = [c for c in (list(chosen) + custom_codes) if c not in orig_codes]
     changed_crit = "" if new_item.strip() == row["item"].strip() else new_item
-    orig_codes = set(src.extract_codes(row["source"]))
-    changed_src = "" if set(codes) == orig_codes else " + ".join(codes)
+    changed_src = " + ".join(orig_codes + added) if added else ""
     changed_flag = "yes" if (changed_crit or changed_src) else "no"
 
     db.update_criterion(username, sid, {
@@ -247,26 +248,32 @@ def render_editor(username, df, row):
     # ---- Box 1: locked original (reference) ----
     with st.container(border=True):
         st.caption("Original - For Reference")
-        st.text_area(f"Criteria {row['id']}", row["item"], height=110,
+        st.text_area(f"Criteria {row['id']}", row["item"], height=170,
                      disabled=True, key=f"lock_item_{row['id']}")
         st.text_input("Source", row["source"], disabled=True,
                       key=f"lock_src_{row['id']}")
-        st.text_area("Quote from Source", row["quote_from_source"], height=140,
+        st.text_area("Quote from Source", row["quote_from_source"], height=260,
                      disabled=True, key=f"lock_q_{row['id']}")
 
     # ---- Box 2: editable copy (saved via the "Save your work" button) ----
     with st.container(border=True):
         st.caption("Your Review - Edit As Needed")
         cur_item = row["changed_criteria"] or row["item"]
-        st.text_area(f"Criteria {row['id']}", value=cur_item, height=110,
+        st.text_area(f"Criteria {row['id']}", value=cur_item, height=140,
                      key=f"ed_item_{row['id']}")
 
-        cur_src = row["changed_source"] or row["source"]
-        tokens = src.split_sources(cur_src)
-        preselect = [t for t in tokens if t in src.SELECTABLE_SOURCES]
+        # the original source is locked in; the user can only ADD sources
+        orig_codes = src.extract_codes(row["source"])
+        st.text_input("Source (locked)", row["source"], disabled=True,
+                      key=f"ed_srclock_{row['id']}")
+        cur_codes = src.split_sources(row["changed_source"] or row["source"])
+        add_default = [c for c in cur_codes
+                       if c in src.SELECTABLE_SOURCES and c not in orig_codes]
         custom_default = " + ".join(
-            t for t in tokens if t not in src.SELECTABLE_SOURCES)
-        st.multiselect("Source", src.SELECTABLE_SOURCES, default=preselect,
+            c for c in cur_codes
+            if c not in src.SELECTABLE_SOURCES and c not in orig_codes)
+        add_options = [s for s in src.SELECTABLE_SOURCES if s not in orig_codes]
+        st.multiselect("Add sources (Optional)", add_options, default=add_default,
                        key=f"ed_src_{row['id']}")
         st.text_input("Add another source (Optional)", value=custom_default,
                       key=f"ed_custom_{row['id']}")
@@ -288,6 +295,21 @@ def render_editor(username, df, row):
     )
     if choice is not None and choice != current_mn:
         db.update_criterion(username, row["id"], {"medically_necessary": choice})
+        refresh_df(username)
+        st.rerun()
+
+    # ---- subjective / objective question ----
+    st.markdown("**Is this criteria Subjective or Objective?**")
+    current_so = str(row.get("subjective_objective", "")).strip()
+    so_options = ["Subjective", "Objective"]
+    so_choice = st.radio(
+        "subjective objective", so_options,
+        index=so_options.index(current_so) if current_so in so_options else None,
+        horizontal=True, key=f"so_{row['id']}", label_visibility="collapsed",
+    )
+    if so_choice is not None and so_choice != current_so:
+        db.update_criterion(username, row["id"],
+                            {"subjective_objective": so_choice})
         refresh_df(username)
         st.rerun()
 
@@ -339,7 +361,8 @@ def criteria_review_page():
                     r = view[view["id"] == i].iloc[0]
                     done = str(r["reviewed"]).lower() == "yes"
                     text = r["changed_criteria"] or r["item"]
-                    base = f"{'✅' if done else '⬜'} {i} · {truncate_words(text)}"
+                    mark = "✅ " if done else ""
+                    base = f"{mark}{i} · {truncate_words(text)}"
                     return strike(base) if str(
                         r["medically_necessary"]).lower() == "no" else base
 
@@ -358,18 +381,23 @@ def criteria_review_page():
                 st.session_state.selected_id = None
 
         st.divider()
-        with st.expander("↩️ Reset my copy to master"):
-            st.caption("Discards all of your edits, additions, and answers.")
-            if st.checkbox("I understand this can't be undone", key="resetconf"):
-                if st.button("Reset to master", width="stretch"):
-                    db.reset_user(username)
-                    for k in [k for k in st.session_state
-                              if k.startswith(("ed_", "mn_", "pick_"))]:
-                        del st.session_state[k]
-                    refresh_df(username)
-                    st.session_state.selected_id = None
-                    st.toast("Reset to master.")
-                    st.rerun()
+        sel = st.session_state.get("selected_id")
+        with st.expander("Reset this criterion to master"):
+            if sel:
+                st.caption(f"Discards your edits and answers for criterion {sel}.")
+                if st.checkbox("I understand this can't be undone",
+                               key="resetconf"):
+                    if st.button("Reset to master", width="stretch"):
+                        db.reset_criterion(username, sel)
+                        for k in [f"ed_item_{sel}", f"ed_src_{sel}",
+                                  f"ed_custom_{sel}", f"ed_rev_{sel}",
+                                  f"mn_{sel}", f"so_{sel}"]:
+                            st.session_state.pop(k, None)
+                        refresh_df(username)
+                        st.toast(f"Reset criterion {sel} to master.")
+                        st.rerun()
+            else:
+                st.caption("Select a criterion first.")
 
     st.title("Medical-Necessity Criteria — Skin Substitute Grafts")
 
@@ -386,7 +414,7 @@ def criteria_review_page():
         render_source_viewer(row)
 
     st.divider()
-    if st.button("Save your work", type="primary"):
+    if st.button("Save your work", type="primary", width="stretch"):
         save_current_edits(username, df, selected_id)
 
 
