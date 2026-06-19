@@ -187,14 +187,14 @@ def render_source_viewer(row):
 # Editor (left pane)
 # --------------------------------------------------------------------------- #
 def render_add_form(username, df):
-    with st.expander("➕ Add a new criterion"):
+    with st.expander("➕ Add Criterion"):
         with st.form("add_form", clear_on_submit=True):
             sections = sorted(df["section"].dropna().unique())
             section = st.selectbox("Section", [""] + list(sections))
             item = st.text_area("Criteria", height=90)
             chosen = st.multiselect("Source", src.SELECTABLE_SOURCES)
-            custom = st.text_input("Add another source (optional)")
-            if st.form_submit_button("Add criterion", type="secondary"):
+            custom = st.text_input("Add another source (Optional)")
+            if st.form_submit_button("Add Criterion", type="secondary"):
                 if not section.strip():
                     st.error("Please choose a Section.")
                 elif not item.strip():
@@ -215,13 +215,38 @@ def render_add_form(username, df):
                     st.rerun()
 
 
+def save_current_edits(username, df, sid):
+    """Persist the selected criterion's editable-box widgets to Supabase."""
+    row = df[df["id"] == sid].iloc[0]
+    new_item = str(st.session_state.get(f"ed_item_{sid}", row["item"]))
+    chosen = st.session_state.get(f"ed_src_{sid}", [])
+    custom = st.session_state.get(f"ed_custom_{sid}", "")
+    reviewed = st.session_state.get(f"ed_rev_{sid}", False)
+
+    codes = list(chosen) + [c.strip() for c in re.split(r"[+,]", custom) if c.strip()]
+    changed_crit = "" if new_item.strip() == row["item"].strip() else new_item
+    orig_codes = set(src.extract_codes(row["source"]))
+    changed_src = "" if set(codes) == orig_codes else " + ".join(codes)
+    changed_flag = "yes" if (changed_crit or changed_src) else "no"
+
+    db.update_criterion(username, sid, {
+        "changed_criteria": changed_crit,
+        "changed_source": changed_src,
+        "reviewed": "yes" if reviewed else "",
+        "changed": changed_flag,
+    })
+    refresh_df(username)
+    st.toast(f"Saved criterion {sid}.")
+    st.rerun()
+
+
 def render_editor(username, df, row):
     st.subheader(section_title(row["section"]))
     render_add_form(username, df)
 
     # ---- Box 1: locked original (reference) ----
     with st.container(border=True):
-        st.caption("Original — for reference (locked)")
+        st.caption("Original - For Reference")
         st.text_area(f"Criteria {row['id']}", row["item"], height=110,
                      disabled=True, key=f"lock_item_{row['id']}")
         st.text_input("Source", row["source"], disabled=True,
@@ -229,51 +254,25 @@ def render_editor(username, df, row):
         st.text_area("Quote from Source", row["quote_from_source"], height=140,
                      disabled=True, key=f"lock_q_{row['id']}")
 
-    # ---- Box 2: editable copy ----
+    # ---- Box 2: editable copy (saved via the "Save your work" button) ----
     with st.container(border=True):
-        st.caption("Your review — edit as needed")
-        with st.form(f"edit_{row['id']}"):
-            cur_item = row["changed_criteria"] or row["item"]
-            new_item = st.text_area(f"Criteria {row['id']}", cur_item, height=110)
+        st.caption("Your Review - Edit As Needed")
+        cur_item = row["changed_criteria"] or row["item"]
+        st.text_area(f"Criteria {row['id']}", value=cur_item, height=110,
+                     key=f"ed_item_{row['id']}")
 
-            cur_src = row["changed_source"] or row["source"]
-            tokens = src.split_sources(cur_src)
-            preselect = [t for t in tokens if t in src.SELECTABLE_SOURCES]
-            custom_default = " + ".join(
-                t for t in tokens if t not in src.SELECTABLE_SOURCES)
-            chosen = st.multiselect("Source", src.SELECTABLE_SOURCES,
-                                    default=preselect)
-            custom = st.text_input("Add another source (optional)",
-                                   value=custom_default)
-
-            c1, c2 = st.columns([1, 1])
-            with c1:
-                reviewed = st.checkbox(
-                    "✅ Mark as reviewed",
-                    value=str(row["reviewed"]).lower() == "yes")
-            with c2:
-                saved = st.form_submit_button("💾 Save changes", type="secondary")
-
-            if saved:
-                codes = list(chosen) + (
-                    [c.strip() for c in re.split(r"[+,]", custom) if c.strip()])
-                new_src = " + ".join(codes)
-
-                changed_crit = "" if new_item.strip() == row["item"].strip() \
-                    else new_item
-                orig_codes = set(src.extract_codes(row["source"]))
-                changed_src = "" if set(codes) == orig_codes else new_src
-                changed_flag = "yes" if (changed_crit or changed_src) else "no"
-
-                db.update_criterion(username, row["id"], {
-                    "changed_criteria": changed_crit,
-                    "changed_source": changed_src,
-                    "reviewed": "yes" if reviewed else "",
-                    "changed": changed_flag,
-                })
-                refresh_df(username)
-                st.toast(f"Saved criterion {row['id']}.")
-                st.rerun()
+        cur_src = row["changed_source"] or row["source"]
+        tokens = src.split_sources(cur_src)
+        preselect = [t for t in tokens if t in src.SELECTABLE_SOURCES]
+        custom_default = " + ".join(
+            t for t in tokens if t not in src.SELECTABLE_SOURCES)
+        st.multiselect("Source", src.SELECTABLE_SOURCES, default=preselect,
+                       key=f"ed_src_{row['id']}")
+        st.text_input("Add another source (Optional)", value=custom_default,
+                      key=f"ed_custom_{row['id']}")
+        st.checkbox("Mark as reviewed",
+                    value=str(row["reviewed"]).lower() == "yes",
+                    key=f"ed_rev_{row['id']}")
 
     # ---- medical-necessity question (soft delete) ----
     st.markdown(
@@ -292,7 +291,7 @@ def render_editor(username, df, row):
         refresh_df(username)
         st.rerun()
 
-    st.warning("SAVE YOUR COMPLETE CSV FILE DOWN BELOW")
+    st.warning("SAVE YOUR WORK DOWN BELOW")
 
 
 # --------------------------------------------------------------------------- #
@@ -364,6 +363,9 @@ def criteria_review_page():
             if st.checkbox("I understand this can't be undone", key="resetconf"):
                 if st.button("Reset to master", width="stretch"):
                     db.reset_user(username)
+                    for k in [k for k in st.session_state
+                              if k.startswith(("ed_", "mn_", "pick_"))]:
+                        del st.session_state[k]
                     refresh_df(username)
                     st.session_state.selected_id = None
                     st.toast("Reset to master.")
@@ -373,7 +375,7 @@ def criteria_review_page():
 
     selected_id = st.session_state.get("selected_id")
     if not selected_id:
-        st.info("👈 Pick a section in the sidebar, then choose a criterion to begin.")
+        st.info("Pick a section in the sidebar, then choose a criterion to begin.")
         return
 
     row = df[df["id"] == selected_id].iloc[0]
@@ -384,14 +386,8 @@ def criteria_review_page():
         render_source_viewer(row)
 
     st.divider()
-    st.markdown("#### Save your work")
-    st.caption("Your changes save automatically to the database. Download a CSV "
-               "snapshot of all your criteria below.")
-    st.download_button(
-        "⬇️ Download my CSV",
-        df.drop(columns=["row_id"], errors="ignore").to_csv(index=False).encode(),
-        file_name=f"criteria_{username}.csv", mime="text/csv",
-    )
+    if st.button("Save your work", type="primary"):
+        save_current_edits(username, df, selected_id)
 
 
 # --------------------------------------------------------------------------- #
