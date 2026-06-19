@@ -1,0 +1,22 @@
+# --- Secrets & credentials (NEVER commit) ---
+.streamlit/secrets.toml
+.env
+# config.yaml: cookie signing key + (legacy) hashed credentials
+config.yaml
+# users.csv: account store (usernames + hashed passwords)
+users.csv
+
+# --- Per-user working data ---
+data/users/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# --- OS / editor cruft ---
+.DS_Store
+.idea/
+.vscode/
