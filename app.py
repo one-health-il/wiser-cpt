@@ -215,30 +215,47 @@ def render_add_form(username, df):
                     st.rerun()
 
 
-def save_current_edits(username, df, sid):
-    """Persist the selected criterion's editable-box widgets to Supabase."""
-    row = df[df["id"] == sid].iloc[0]
+def collect_widget_values(row, sid):
+    """Build the full set of DB values for a criterion from its widgets:
+    edits, added sources, reviewed, and both questions."""
     new_item = str(st.session_state.get(f"ed_item_{sid}", row["item"]))
     chosen = st.session_state.get(f"ed_src_{sid}", [])
     custom = st.session_state.get(f"ed_custom_{sid}", "")
     reviewed = st.session_state.get(f"ed_rev_{sid}", False)
+    mn = st.session_state.get(f"mn_{sid}", None)
+    so = st.session_state.get(f"so_{sid}", None)
 
     custom_codes = [c.strip() for c in re.split(r"[+,]", custom) if c.strip()]
     orig_codes = src.extract_codes(row["source"])  # locked-in
     added = [c for c in (list(chosen) + custom_codes) if c not in orig_codes]
     changed_crit = "" if new_item.strip() == row["item"].strip() else new_item
     changed_src = " + ".join(orig_codes + added) if added else ""
-    changed_flag = "yes" if (changed_crit or changed_src) else "no"
 
-    db.update_criterion(username, sid, {
+    vals = {
         "changed_criteria": changed_crit,
         "changed_source": changed_src,
         "reviewed": "yes" if reviewed else "",
-        "changed": changed_flag,
-    })
-    refresh_df(username)
-    st.toast(f"Saved criterion {sid}.")
-    st.rerun()
+        "medically_necessary": mn if mn in ("Yes", "No") else "",
+        "subjective_objective": so if so in ("Subjective", "Objective") else "",
+    }
+    vals["changed"] = "yes" if (changed_crit or changed_src) else "no"
+    return vals
+
+
+def persist_if_changed(username, row, sid, toast=False):
+    """Write all of a criterion's widget values to Supabase. Used both for the
+    explicit "Save your work" button (toast=True) and the auto-save backup that
+    runs on any change (toast=False)."""
+    vals = collect_widget_values(row, sid)
+    current = {k: str(row.get(k, "")) for k in vals}
+    if vals != current:
+        db.update_criterion(username, sid, vals)
+        refresh_df(username)
+        if toast:
+            st.toast(f"Saved criterion {sid}.")
+        st.rerun()
+    elif toast:
+        st.toast(f"Criterion {sid} is already saved.")
 
 
 def render_editor(username, df, row):
@@ -288,32 +305,27 @@ def render_editor(username, df, row):
     )
     current_mn = str(row.get("medically_necessary", "")).strip()
     options = ["Yes", "No"]
-    choice = st.radio(
+    st.radio(
         "medical necessity", options,
         index=options.index(current_mn) if current_mn in options else None,
         horizontal=True, key=f"mn_{row['id']}", label_visibility="collapsed",
     )
-    if choice is not None and choice != current_mn:
-        db.update_criterion(username, row["id"], {"medically_necessary": choice})
-        refresh_df(username)
-        st.rerun()
 
     # ---- subjective / objective question ----
     st.markdown("**Is this criteria Subjective or Objective?**")
     current_so = str(row.get("subjective_objective", "")).strip()
     so_options = ["Subjective", "Objective"]
-    so_choice = st.radio(
+    st.radio(
         "subjective objective", so_options,
         index=so_options.index(current_so) if current_so in so_options else None,
         horizontal=True, key=f"so_{row['id']}", label_visibility="collapsed",
     )
-    if so_choice is not None and so_choice != current_so:
-        db.update_criterion(username, row["id"],
-                            {"subjective_objective": so_choice})
-        refresh_df(username)
-        st.rerun()
 
     st.warning("SAVE YOUR WORK DOWN BELOW")
+
+    # auto-save backup: persist any change immediately (the bottom button does
+    # the same explicitly)
+    persist_if_changed(username, row, row["id"])
 
 
 # --------------------------------------------------------------------------- #
@@ -415,7 +427,7 @@ def criteria_review_page():
 
     st.divider()
     if st.button("Save your work", type="primary", width="stretch"):
-        save_current_edits(username, df, selected_id)
+        persist_if_changed(username, row, selected_id, toast=True)
 
 
 # --------------------------------------------------------------------------- #
