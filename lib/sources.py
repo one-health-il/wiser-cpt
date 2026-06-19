@@ -80,6 +80,37 @@ def parse_source(source: str):
     return primary, secondary
 
 
+# codes a user can pick from in the editable Source multiselect
+SELECTABLE_SOURCES = ["L35041", "L36690", "A54117", "A56696", "WISER",
+                      "L35125", "NCD 270.3"]
+
+
+def extract_codes(text: str):
+    """All recognised document codes in a source string, in order, deduped."""
+    out = []
+    for m in _CODE_RE.finditer(text or ""):
+        c = _normalise(m.group(0))
+        if c not in out:
+            out.append(c)
+    return out
+
+
+def split_sources(text: str):
+    """Split a stored source string into tokens for the editor.
+
+    'L35041 + A54117'            -> ['L35041', 'A54117']
+    'L35041 (detail in L35125)'  -> ['L35041', 'L35125']   (via code extraction)
+    'L35041 + CUSTOM'            -> ['L35041', 'CUSTOM']
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+    if " + " in text:
+        return [t.strip() for t in text.split(" + ") if t.strip()]
+    codes = extract_codes(text)
+    return codes if codes else [text]
+
+
 def all_documents():
     """All primary PDFs, for a manual document picker."""
     out = []

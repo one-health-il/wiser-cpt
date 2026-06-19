@@ -11,7 +11,7 @@ create table if not exists public.users (
 -- 2) Per-user criteria — one row per (user, criterion).
 --    item / source / quote_from_source = the LOCKED original (Box 1).
 --    changed_criteria / changed_source = the user's EDITABLE copy (Box 2),
---    blank when unchanged. 'changed' is derived: 'yes' if either changed_*
+--    blank when unchanged. 'changed' is derived: 'yes' if either changed_*Y
 --    column has content, else 'no'. Rows answered "No" are kept (soft-delete)
 --    with medically_necessary = 'No'.
 create table if not exists public.criteria (
